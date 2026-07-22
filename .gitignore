@@ -3,3 +3,4 @@ spark-env/
 .env
 
 certs/
+__pycache__/
