@@ -2,21 +2,26 @@ import os
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
+# TODO:only used in wsl remove for other env
+os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+os.environ["SPARK_DRIVER_HOST"] = "127.0.0.1"
 # Kafka Broker Details
-KAFKA_BOOTSTRAP_SERVERS = "kafka-dbs-jobready123-a548.d.aivencloud.com:13858"
-KAFKA_TOPIC = "customer-web-behaviors"
+KAFKA_BOOTSTRAP_SERVERS = "kafka-2eb02e05-kafka202607.e.aivencloud.com:14687"
+KAFKA_TOPIC = "pos-transaction-event"
 
 # Define the POSIX path to your uploaded Volume files
 CERT_DIR = os.getenv("KAFKA_CERT_DIR")
-CA_FILE = f"{CERT_DIR}/ca.pem"
-CERT_FILE = f"{CERT_DIR}/service.cert"
-KEY_FILE = f"{CERT_DIR}/service.key"
+CA_PATH = f"{CERT_DIR}/ca.pem"
+CERT_PATH = f"{CERT_DIR}/service.cert"
+KEY_PATH = f"{CERT_DIR}/service.key"
 
 VOLUME_PATH = ""
 # State Management Offsets Path
@@ -47,6 +52,7 @@ spark = (
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
     .config("fs.s3a.connection.maximum", "100")
     .config("fs.s3a.threads.max", "20")
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.8")
     .getOrCreate()
 )
 
@@ -95,3 +101,14 @@ processed_stream = (
     .select(from_json(col("json_payload"), pos_transaction_schema).alias("data"))
     .select("data.*")
 )
+
+
+test_query = (
+    processed_stream.writeStream.format("console")
+    .outputMode("append")
+    .option("truncate", "false")
+    .option("numRows", 5)
+    .start()
+)
+test_query.awaitTermination(30)  # run for 30 seconds for testing
+test_query.stop()
