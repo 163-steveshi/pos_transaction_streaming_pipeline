@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Initialize Faker for generating random customer metadata
 fake = Faker()
 load_dotenv()
-# --- AIVEN KAFKA CONFIGURATION ---
+# --- AIVEN KAFKA CONFIG URATION ---
 AIVEN_BOOTSTRAP_SERVER = "kafka-2eb02e05-kafka202607.e.aivencloud.com:14687"
 TOPIC_NAME = "pos-transaction-event"
 
