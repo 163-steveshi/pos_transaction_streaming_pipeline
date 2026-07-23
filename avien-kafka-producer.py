@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 fake = Faker()
 load_dotenv()
 # --- AIVEN KAFKA CONFIG URATION ---
-AIVEN_BOOTSTRAP_SERVER = "kafka-2eb02e05-kafka202607.e.aivencloud.com:14687"
-TOPIC_NAME = "pos-transaction-event"
+AIVEN_BOOTSTRAP_SERVER = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
+TOPIC_NAME = os.environ.get("KAFKA_TOPIC", "pos-transaction-event")
 
 # Paths to your downloaded Aiven credentials
 CERT_DIR = os.getenv("KAFKA_CERT_DIR")
