@@ -59,7 +59,11 @@ def generate_clean_record() -> dict:
     taxable = unit_price * quantity - discount
     tax_amount = round(max(taxable, 0) * tax_rate, 2)
 
-    ts = fake.date_time_between(start_date="-7d", end_date="now")
+    ts = (
+        fake.date_time_between(start_date="-5m", end_date="now")
+        if random.random() < 0.85
+        else fake.date_time_between(start_date="-7d", end_date="-15m")
+    )
 
     return {
         # bothify lets us template a realistic-looking transaction ID with
@@ -187,7 +191,7 @@ NOISE_FUNCTIONS = [
 
 
 def generate_pos_record(
-    seen_ids: list | None = None, noise_rate: float = 0.25
+    seen_ids: list | None = None, noise_rate: float = 0.10
 ) -> tuple[dict, bool]:
     """
     Generate one POS record. With probability `noise_rate`, the record is

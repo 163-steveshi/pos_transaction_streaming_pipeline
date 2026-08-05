@@ -15,6 +15,7 @@ from pyspark.sql.functions import (
     create_map,
     lit as F_lit,
     size,
+    coalesce,
 )
 from pyspark.sql.types import (
     StructType,
@@ -32,6 +33,7 @@ from reference_data import (
     STORE_IDS,
 )
 from itertools import chain
+from delta.tables import DeltaTable
 
 load_dotenv()
 # TODO:only used in wsl remove for other env
@@ -49,11 +51,13 @@ KEY_PATH = f"{CERT_DIR}/service.key"
 
 VOLUME_PATH = os.getenv("S3_VOLUME_PATH")
 # State Management Offsets Path
-CHECKPOINT_PATH = f"{VOLUME_PATH}/checkpoints/aiven_s3_local"
+CHECKPOINT_PATH = f"{VOLUME_PATH}/checkpoints/aiven_s3_local/bronze"
 
 # TARGET DATABASE TABLE
-TARGET_DB_TABLE_PATH = os.getenv("TARGET_DB_TABLE_PATH")
-
+BRONZE_TABLE_PATH = os.getenv("BRONZE_TABLE_PATH")
+SILVER_CLEAN_TABLE_PATH = os.getenv("SILVER_CLEAN_TABLE_PATH", "")
+SILVER_LATE_TABLE_PATH = os.getenv("SILVER_LATE_TABLE_PATH")
+BRONZE_DLQ_TABLE_PATH = os.getenv("BRONZE_DLQ_TABLE_PATH")
 # S3 credentials from local env variables
 AWS_S3_ACCESS_KEY = os.environ["AWS_S3_ACCESS_KEY"]
 AWS_S3_SECRET_KEY = os.environ["AWS_S3_SECRET_KEY"]
@@ -134,25 +138,31 @@ processed_stream = (
 
 # BELOW LOGIC NEED TO BE TRIGGERED with valid external table created in the S3
 
-query = (
+bronze_query = (
     processed_stream.writeStream.format("delta")
     .outputMode("append")
     .option("checkpointLocation", CHECKPOINT_PATH)
     .option("mergeSchema", "true")  # solve schema evolution
     .trigger(processingTime="60 seconds")
-    .start(TARGET_DB_TABLE_PATH)
+    .start(BRONZE_TABLE_PATH)
 )
 
 
 def shutdown_handler(sig, frame):
-    print("Stopping streaming query gracefully...")
-    if query:
-        query.stop()
+    print("Stopping streaming queries gracefully...")
+
+    if bronze_query:
+        bronze_query.stop()
+
+    if silver_query:
+        silver_query.stop()
+
+    print("Stopping Spark...")
     spark.stop()
 
 
 signal.signal(signal.SIGINT, shutdown_handler)
-query.awaitTermination()  # block existed
+
 
 # TODO: write a dag that monitor the running of the script, and configure retry and  email the user after the all retries are failed
 
@@ -164,20 +174,38 @@ query.awaitTermination()  # block existed
 # watermarked_stream = processed_stream.withWatermark("event_timestamp", "10 minutes")
 
 # for finance data with revenue needed: you need to actuall save the data into the backfill table
-processed_stream_with_lateness = processed_stream.withColumn(
-    "is_late",
-    (unix_timestamp(col("ingested_time")) - unix_timestamp(col("event_timestamp")))
-    > (10 * 60),  # 10 min threshold
+
+
+bronze_stream = spark.readStream.format("delta").load(
+    BRONZE_TABLE_PATH
+)  # change to load(BRONZE_PATH)
+
+
+processed_stream_with_lateness = (
+    bronze_stream.withColumn("event_time_ts", col("event_time").cast("timestamp"))
+    .withColumn(
+        "ingestion_delay_seconds",
+        when(
+            col("event_time_ts").isNotNull(),
+            unix_timestamp(col("ingested_time")) - unix_timestamp(col("event_time_ts")),
+        ),
+    )
+    .withColumn(
+        "is_late",
+        when(
+            col("ingestion_delay_seconds").isNotNull(),
+            col("ingestion_delay_seconds") > 3600,
+        ).otherwise(False),
+    )
 )
 
 
-def upsert_to_clean(micro_batch_df, batch_id):
+def rotute_and_upsert_batch(micro_batch_df, batch_id):
     print(f"Processing micro-batch ID: {batch_id}")
     # STEP 1 get all null column record
     required_columns = [
         "transaction_id",
         "item_sequence",
-        "customer_id",
         "event_time",
         "sku",
         "item_unit_price",
@@ -202,7 +230,6 @@ def upsert_to_clean(micro_batch_df, batch_id):
     ).withColumn(
         "error_reason", expr("filter(error_reason, x -> x is not null)")
     )  # remove the null in the error reason array
-
     casted_check_df = (
         null_check_df.withColumn(
             "item_unit_price_casted", expr("try_cast(item_unit_price AS DECIMAL(10,2))")
@@ -215,16 +242,16 @@ def upsert_to_clean(micro_batch_df, batch_id):
         )
         .withColumn("tax_amount_casted", expr("try_cast(tax_amount AS DECIMAL(10,2))"))
         .withColumn("item_sequence_casted", expr("try_cast(item_sequence AS INT)"))
-        .withColumn("customer_id_casted", expr("try_cast(customer_id AS BIGINT)"))
+        .withColumn("event_time_casted", expr("try_cast(event_time AS TIMESTAMP)"))
         .withColumn(
             "error_reason",
             concat(
-                col("error_reason"),
+                coalesce(col("error_reason"), array().cast("array<string>")),
                 array(
                     *[
                         when(
                             col(raw_c).isNotNull() & col(casted_c).isNull(),
-                            lit(f"INVALID_FORMAT_{casted_c.upper()}"),
+                            lit(f"INVALID_FORMAT_{raw_c.upper()}"),
                         )
                         for raw_c, casted_c in [
                             ("item_unit_price", "item_unit_price_casted"),
@@ -233,7 +260,6 @@ def upsert_to_clean(micro_batch_df, batch_id):
                             ("item_sequence", "item_sequence_casted"),
                             ("discount_amount", "discount_amount_casted"),
                             ("tax_amount", "tax_amount_casted"),
-                            ("customer_id", "customer_id_casted"),
                         ]
                     ]
                 ),
@@ -244,8 +270,6 @@ def upsert_to_clean(micro_batch_df, batch_id):
 
     MAX_QUANTITY = 200  # No single customer buys 500 of one item in a normal line
     MAX_UNIT_PRICE = 200.0  # Upper limit for your pos item price
-
-    currency_map_expr = create_map([F_lit(x) for x in chain(*CURRENCIES.items())])
 
     # TODO: google and search a way to refact the code for readability
     business_rule_check_df = casted_check_df.withColumn(
@@ -259,34 +283,31 @@ def upsert_to_clean(micro_batch_df, batch_id):
                 ),
                 when(
                     (
-                        col("item_quantity_casted")
-                        <= 0 | col("item_quantity_casted")
-                        > MAX_QUANTITY
+                        (col("item_quantity_casted") <= 0)
+                        | (col("item_quantity_casted") > MAX_QUANTITY)
                     ),
                     lit("INVALID_RANGE_ITEM_QUANTITY"),
                 ),
                 when(
                     (
-                        col("item_unit_price_casted")
-                        <= 0 | col("item_unit_price_casted")
-                        > MAX_UNIT_PRICE
+                        (col("item_unit_price_casted") <= 0)
+                        | (col("item_unit_price_casted") > MAX_UNIT_PRICE)
                     ),
                     lit("INVALID_RANGE_ITEM_UNIT_PRICE"),
                 ),
+                when(col("tax_amount_casted") < 0, lit("INVALID_RANGE_TAX_AMOUNT")),
                 when(
-                    col("tax_amount_casted") <= 0, lit("INVALID_RANGE_TAX_UNIT_PRICE")
+                    col("discount_amount_casted") < 0,
+                    lit("INVALID_RANGE_DISCOUNT_AMOUNT"),
                 ),
                 when(
                     col("event_time_casted") > expr("current_timestamp()"),
                     lit("INVALID_FUTURE_EVENT_TIME"),
                 ),
                 when(
-                    col("event_time") == "1970-01-01T00:00:00.000Z",
+                    col("event_time_casted")
+                    == expr("timestamp('1970-01-01 00:00:00')"),
                     lit("EPOCH_RESET_TERMINAL_REBOOT"),
-                ).otherwise(lit("VALID_TIME")),
-                when(
-                    col("event_time") > expr("current_timestamp()"),
-                    lit("INVALID_FUTURE_EVENT_TIME"),
                 ),
                 when(
                     col("customer_id").contains("\ufffd")
@@ -323,12 +344,6 @@ def upsert_to_clean(micro_batch_df, batch_id):
                     col("country").isNotNull() & ~col("country").isin(COUNTRIES),
                     lit("INVALID_ENUM_COUNTRY"),
                 ),
-                when(
-                    col("country").isNotNull()
-                    & col("currency").isNotNull()
-                    & (col("currency") != currency_map_expr[col("country")]),
-                    lit("CURRENCY_COUNTRY_MISMATCH"),
-                ),
             ),
         ),
     ).withColumn("error_reason", expr("filter(error_reason, x -> x is not null)"))
@@ -357,7 +372,9 @@ def upsert_to_clean(micro_batch_df, batch_id):
         .withColumn("is_corrupted", lit(True))
     )
 
-    valid_df = business_rule_check_df.filter(size("error_reason") == 0).select(
+    valid_df = business_rule_check_df.filter(
+        col("error_reason").isNull() | (size("error_reason") == 0)
+    ).select(
         "transaction_id",
         "sku",
         "payment_type",
@@ -368,13 +385,14 @@ def upsert_to_clean(micro_batch_df, batch_id):
         "terminal_id",
         "ingested_time",
         "is_late",
+        "customer_id",
         col("item_unit_price_casted").alias("item_unit_price"),
         col("item_quantity_casted").alias("item_quantity"),
         col("event_time_casted").alias("event_time"),
         col("item_sequence_casted").alias("item_sequence"),
         col("discount_amount_casted").alias("discount_amount"),
         col("tax_amount_casted").alias("tax_amount"),
-        col("customer_id_casted").alias("customer_id"),
+        "ingestion_delay_seconds",
     )
 
     late_df = valid_df.filter(col("is_late")).select(
@@ -395,6 +413,7 @@ def upsert_to_clean(micro_batch_df, batch_id):
         "terminal_id",
         "ingested_time",
         "is_late",
+        "ingestion_delay_seconds",
     )
 
     ontime_df = valid_df.filter(~col("is_late")).select(
@@ -415,23 +434,74 @@ def upsert_to_clean(micro_batch_df, batch_id):
         "terminal_id",
         "ingested_time",
     )
-    # TODO: modify the pass
+    # # TODO: fix the silver on time df is has zero record
+    # quarantine_df.show(5)
+    # ontime_df.show(5)
+    # late_df.show(5)
+    q_count = quarantine_df.count()
+    l_count = late_df.count()
+    o_count = ontime_df.count()
+    print(f"batch {batch_id}: quarantine={q_count}, late={l_count}, ontime={o_count}")
 
     quarantine_df.write.format("delta").mode("append").option(
         "mergeSchema", "true"
-    ).save("s3a://your-bucket/landing/cus_stream_dlq")
+    ).save(BRONZE_DLQ_TABLE_PATH)
 
     late_df.write.format("delta").mode("append").option("mergeSchema", "true").save(
-        "s3a://your-bucket/landing/cus_stream_dlq"
+        SILVER_LATE_TABLE_PATH
     )
 
-    ontime_df.sparkSession.sql(f"""
-            MERGE INTO {TARGET_DB_TABLE} AS target
-            USING incoming_batch_view AS source
-            ON target.transaction_id = source.transaction_id
-            WHEN MATCHED THEN
-                UPDATE SET *
-            WHEN NOT MATCHED THEN
-                INSERT *
-        """)
-    print(f"  Successfully merged clean records into {TARGET_DB_TABLE}")
+    # # BELOW COMMENT OUT ONLY Work when script executed inside the unicatalog
+    # ontime_df.sparkSession.sql(f"""
+    #         MERGE INTO {TARGET_DB_TABLE} AS target
+    #         USING incoming_batch_view AS source
+    #         ON target.transaction_id = source.transaction_id
+    #         WHEN MATCHED THEN
+    #             UPDATE SET *
+    #         WHEN NOT MATCHED THEN
+    #             INSERT *
+    #     """)
+    # print(f"  Successfully merged clean records into {TARGET_DB_TABLE}")
+
+    if DeltaTable.isDeltaTable(micro_batch_df.sparkSession, SILVER_CLEAN_TABLE_PATH):
+        target = DeltaTable.forPath(
+            micro_batch_df.sparkSession, SILVER_CLEAN_TABLE_PATH
+        )
+        (
+            target.alias("target")
+            .merge(
+                ontime_df.alias("source"),
+                "target.transaction_id = source.transaction_id",
+            )
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+    else:
+        # first batch ever — table doesn't exist yet, create it directly
+        ontime_df.write.format("delta").mode("append").option(
+            "mergeSchema", "true"
+        ).save(SILVER_CLEAN_TABLE_PATH)
+
+
+silver_query = (
+    processed_stream_with_lateness.writeStream.foreachBatch(
+        rotute_and_upsert_batch
+    )  # Routes to late table, dlq, and regular cleaned table
+    .option("checkpointLocation", f"{VOLUME_PATH}/checkpoints/aiven_s3_local/silver")
+    # .trigger(availableNow=True)
+    .trigger(processingTime="60 seconds")
+    .start()
+)
+
+
+try:
+    spark.streams.awaitAnyTermination()
+
+except KeyboardInterrupt:
+    print("Stopping streaming queries gracefully...")
+
+    bronze_query.stop()
+    silver_query.stop()
+
+    spark.stop()

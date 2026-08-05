@@ -4,3 +4,4 @@ spark-env/
 
 certs/
 __pycache__/
+spark-read-study-bucket/
