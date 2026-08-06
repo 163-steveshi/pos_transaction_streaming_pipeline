@@ -1,5 +1,5 @@
 import os
-import signal
+from py4j.protocol import Py4JError
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
@@ -12,7 +12,6 @@ from pyspark.sql.functions import (
     concat,
     filter as sql_filter,
     unix_timestamp,
-    create_map,
     lit as F_lit,
     size,
     coalesce,
@@ -27,12 +26,9 @@ from dotenv import load_dotenv
 from reference_data import (
     CHANNELS,
     COUNTRIES,
-    CURRENCIES,
     PAYMENT_TYPES,
-    SKU_POOL,
     STORE_IDS,
 )
-from itertools import chain
 from delta.tables import DeltaTable
 
 load_dotenv()
@@ -148,22 +144,6 @@ bronze_query = (
 )
 
 
-def shutdown_handler(sig, frame):
-    print("Stopping streaming queries gracefully...")
-
-    if bronze_query:
-        bronze_query.stop()
-
-    if silver_query:
-        silver_query.stop()
-
-    print("Stopping Spark...")
-    spark.stop()
-
-
-signal.signal(signal.SIGINT, shutdown_handler)
-
-
 # TODO: write a dag that monitor the running of the script, and configure retry and  email the user after the all retries are failed
 
 
@@ -179,7 +159,6 @@ signal.signal(signal.SIGINT, shutdown_handler)
 bronze_stream = spark.readStream.format("delta").load(
     BRONZE_TABLE_PATH
 )  # change to load(BRONZE_PATH)
-
 
 processed_stream_with_lateness = (
     bronze_stream.withColumn("event_time_ts", col("event_time").cast("timestamp"))
@@ -496,12 +475,22 @@ silver_query = (
 
 
 try:
-    spark.streams.awaitAnyTermination()
-
-except KeyboardInterrupt:
-    print("Stopping streaming queries gracefully...")
-
-    bronze_query.stop()
-    silver_query.stop()
-
+    while bronze_query.isActive or silver_query.isActive:
+        if bronze_query.isActive:
+            bronze_query.awaitTermination(
+                5
+            )  # returns after 5s, or immediately if stopped
+        if silver_query.isActive:
+            silver_query.awaitTermination(5)
+except (KeyboardInterrupt, Py4JError):
+    print("\nShutdown signal received — stopping streaming queries gracefully...")
+finally:
+    if bronze_query.isActive:
+        print("Stopping bronze_query (waiting for current micro-batch to finish)...")
+        bronze_query.stop()
+    if silver_query.isActive:
+        print("Stopping silver_query (waiting for current micro-batch to finish)...")
+        silver_query.stop()
+    print("Stopping Spark...")
     spark.stop()
+    print("Shutdown complete.")

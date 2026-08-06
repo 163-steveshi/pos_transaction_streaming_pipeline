@@ -10,7 +10,7 @@ Install: pip install faker
 """
 
 import random
-import string
+import datetime
 from faker import Faker
 
 fake = Faker()
@@ -39,7 +39,7 @@ SKU_POOL = [fake.ean13() for _ in range(200)]
 
 
 def _iso(dt) -> str:
-    return dt.isoformat(timespec="milliseconds") + "Z"
+    return dt.replace(tzinfo=None).isoformat(timespec="milliseconds") + "Z"
 
 
 # ----------------------------- clean record -----------------------------
@@ -60,11 +60,14 @@ def generate_clean_record() -> dict:
     tax_amount = round(max(taxable, 0) * tax_rate, 2)
 
     ts = (
-        fake.date_time_between(start_date="-5m", end_date="now")
+        fake.date_time_between(
+            start_date="-5m", end_date="now", tzinfo=datetime.timezone.utc
+        )
         if random.random() < 0.85
-        else fake.date_time_between(start_date="-7d", end_date="-15m")
+        else fake.date_time_between(
+            start_date="-7d", end_date="-15m", tzinfo=datetime.timezone.utc
+        )
     )
-
     return {
         # bothify lets us template a realistic-looking transaction ID with
         # random digits, similar to what a real POS system generates
