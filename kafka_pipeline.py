@@ -1,10 +1,11 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, current_timestamp
+from pyspark.sql.functions import col, from_json, current_timestamp, when, lit, array, expr, concat, filter as sql_filter,unix_timestamp
 from pyspark.sql.types import (
     StructType,
     StructField,
     StringType,
 )
+from operator import and_
 
 # Define the volume path
 VOLUME_PATH = "/Volumes/dbs_study/landing/kafaka_use/certs/"
@@ -20,15 +21,12 @@ TARGET_DB_TABLE = "dbs_external_another.bronze.raw_fact_transactions"
 
 
 # Initialize Databricks Spark Session
-spark = (
-    SparkSession.builder.appName("AivenKafkaDirectStreamingPEM")
-    .getOrCreate()
-)
-#use this secret scope in the paid edtion, seem not support in the free edition
+spark = SparkSession.builder.appName("AivenKafkaDirectStreamingPEM").getOrCreate()
+# use this secret scope in the paid edtion, seem not support in the free edition
 # KAFKA_BOOTSTRAP_SERVERS = dbutils.secrets.get(scope="pos_transaction_env_var", key="KAFKA_BOOTSTRAP_SERVERS")
 # KAFKA_TOPIC = dbutils.secrets.get(scope="pos_transaction_env_var", key="KAFKA_TOPIC")
-KAFKA_BOOTSTRAP_SERVERS="kafka-2eb02e05-kafka202607.e.aivencloud.com:14687"
-KAFKA_TOPIC="pos-transaction-event"
+KAFKA_BOOTSTRAP_SERVERS = "kafka-2eb02e05-kafka202607.e.aivencloud.com:14687"
+KAFKA_TOPIC = "pos-transaction-event"
 
 
 # Explicitly define schema for incoming JSON payloads
@@ -98,9 +96,71 @@ query.awaitTermination()  # block existed
 
 # watermarked_stream = processed_stream.withWatermark("event_timestamp", "10 minutes")
 
-#for finance data with revenue needed: you need to actuall save the data into the backfill table
+# for finance data with revenue needed: you need to actuall save the data into the backfill table
 processed_stream_with_lateness = processed_stream.withColumn(
     "is_late",
-    (unix_timestamp(current_timestamp()) - unix_timestamp(col("event_timestamp"))) > (10 * 60)  # 10 min threshold
+    (unix_timestamp(current_timestamp()) - unix_timestamp(col("event_timestamp")))
+    > (10 * 60),  # 10 min threshold
 )
 
+
+def upsert_to_clean(micro_batch_df, batch_id):
+    print(f"Processing micro-batch ID: {batch_id}")
+    # STEP 1 get all null column record
+    required_columns = [
+        "transaction_id",
+        "item_sequence",
+        "customer_id",
+        "event_time",
+        "sku",
+        "item_unit_price",
+        "item_quantity",
+        "discount_amount",
+        "tax_amount",
+        "payment_type",
+        "currency",
+        "country",
+        "channel",
+        "store_id",
+        "terminal_id",
+    ]
+    null_check_df = micro_batch_df.withColumn(
+        "error_reason",
+        array(
+            *[
+                when(col(c).isNull(), lit(f"MISSING_{c.upper()}"))
+                for c in required_columns
+            ]
+        ),
+    ).withColumn("error_reason", expr("filter(error_reason, x -> x is not null)"))
+
+    casted_check_df = (
+        null_check_df.withColumn(
+            "item_unit_price", expr("try_cast(raw_item_unit_price AS DECIMAL(10,2))")
+        )
+        .withColumn(
+            "item_quantity", expr("try_cast(raw_item_quantity AS DECIMAL(10,2))")
+        )
+        .withColumn("event_time", expr("try_cast(raw_event_time AS TIMESTAMP)"))
+        # ... other casts ...
+        .withColumn(
+            "error_reason",
+            concat(
+                col("error_reason"),
+                array(
+                    *[
+                        when(
+                            col(raw_c).isNotNull() & col(casted_c).isNull(),
+                            lit(f"INVALID_FORMAT_{casted_c.upper()}"),
+                        )
+                        for raw_c, casted_c in [
+                            ("raw_item_unit_price", "item_unit_price"),
+                            ("raw_item_quantity", "item_quantity"),
+                            ("raw_event_time", "event_time"),
+                        ]
+                    ]
+                ),
+            ),
+        )
+        .withColumn("error_reason", expr("filter(error_reason, x -> x is not null)"))
+    )
