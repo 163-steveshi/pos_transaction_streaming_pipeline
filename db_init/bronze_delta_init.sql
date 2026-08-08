@@ -5,7 +5,9 @@ Use catalog dbs_external_another;
 CREATE EXTERNAL LOCATION pos_transaction_landing_loc
 URL 's3://spark-read-study-bucket/pos_transaction_landing/'
 WITH (STORAGE CREDENTIAL `db_s3_credentials_databricks-s3-ingest-50f99`);
-
+CREATE EXTERNAL LOCATION pos_transaction_customer_info_landing_loc
+URL 's3://spark-read-study-bucket/pos_transaction_customer/'
+WITH (STORAGE CREDENTIAL `db_s3_credentials_databricks-s3-ingest-50f99`);
 
 CREATE EXTERNAL LOCATION pos_transaction_bronze_loc
 URL 's3://spark-read-study-bucket/pos_transaction_bronze/'
