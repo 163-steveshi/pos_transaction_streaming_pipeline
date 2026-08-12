@@ -1,4 +1,4 @@
-CREATE OR REFRESH STREAMING TABLE dbs_external_another.silver.customers_cleaned (
+CREATE OR REFRESH STREAMING live TABLE customers_cleaned (
     CONSTRAINT valid_id
         EXPECT (customer_id IS NOT NULL)
         ON VIOLATION FAIL UPDATE,
