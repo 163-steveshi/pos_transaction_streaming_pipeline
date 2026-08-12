@@ -87,18 +87,4 @@ TBLPROPERTIES("quality" = "quarantine")
 AS
 SELECT *, true as is_corrupted
 FROM STREAM(bronze.customers_flagged)
-WHERE WHERE SIZE(dq_failure_reasons) > 0;
-
-
--- TODO: move below logic to silver stage
--- CREATE OR REFRESH STREAMING LIVE TABLE customers_cleaned_v2 (
---   CONSTRAINT valid_id EXPECT (ID IS NOT NULL) ON VIOLATION DROP ROW,
---   CONSTRAINT realistic_age EXPECT (AGE >= 0 AND AGE < 130) ON VIOLATION DROP ROW,
---   CONSTRAINT completed_profile EXPECT (NAME IS NOT NULL AND TRIM(NAME) != '') ON VIOLATION DROP ROW
--- )
--- COMMENT "Streaming Silver table enforcing strict data quality constraints on incoming streams"
--- TBLPROPERTIES("quality" = "silver")
--- AS
--- SELECT ID, NAME, AGE, ingestion_time, _rescued_data
--- FROM STREAM(live.customers_flagged_v2)
--- WHERE SIZE(dq_failure_reasons) = 0;
+WHERE SIZE(dq_failure_reasons) > 0;
