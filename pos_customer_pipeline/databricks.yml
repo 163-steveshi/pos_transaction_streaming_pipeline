@@ -1,0 +1,39 @@
+# databricks asset boundle defintion
+bundle:
+  name: dlt-end2end-customer-info-orchestration
+
+include:
+  - ./resources/*.yml
+
+sync:
+  include:
+    - bronze/**
+    - silver/**
+    - resources/**
+# activate below block to force copying instead of linking files
+#deployment:
+#  source_linked: false
+
+# Define global variable names and baseline defaults
+variables:
+  target_catalog:
+    description: "The targeted Unity Catalog layer"
+    default: "dbs_external_another"
+  target_schema_bronze:
+    description: "Target schema for the Bronze DLT layers"
+    default: "bronze"
+  target_schema_silver:
+    description: "Target schema for the Silver DLT layers"
+    default: "silver"
+
+targets:
+  #  Development Environment
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-bbe1e176-55a0.cloud.databricks.com
+    variables:
+      target_catalog: "dbs_external_another"        # Change this to 'dev_catalog' if using a playground catalog
+      target_schema_bronze: "bronze"  # Or 'dev_bronze'
+      target_schema_silver: "silver"  # Or 'dev_silver'

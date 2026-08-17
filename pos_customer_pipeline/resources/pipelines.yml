@@ -1,0 +1,29 @@
+# resources/pipelines.yml
+resources:
+  pipelines:
+
+    #  Bronze Pipeline
+    pos_customer_bronze_pipeline:
+      name: "customer_bronze_${bundle.target}"
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema_bronze}
+      continuous: false
+      serverless: true 
+      libraries:
+        - file:
+            #  Use absolute relative paths including the extension
+            path: ../bronze/ingestions/ingestion.sql
+        - file:
+            path: ../bronze/transformations/transformation.sql
+
+    # Silver Pipeline
+    pos_customer_silver_pipeline:
+      name: "customer_silver_${bundle.target}"
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema_silver}
+      continuous: false
+      serverless: true 
+      libraries:
+        - file:
+            # Use absolute relative paths including the extension
+            path: ../silver/transformations/silver_loading.sql

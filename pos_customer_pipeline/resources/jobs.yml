@@ -1,0 +1,21 @@
+# resources/jobs.yml
+resources:
+  jobs:
+    dlt_pos_customer_job:
+      name: dlt_pos_customer_job
+      tasks:
+        - task_key: bronze
+          pipeline_task:
+            # Dynamically references the Bronze pipeline ID defined above
+            pipeline_id: ${resources.pipelines.pos_customer_bronze_pipeline.id}
+            
+        - task_key: silver
+          depends_on:
+            - task_key: bronze
+          pipeline_task:
+            # Dynamically references the Silver pipeline ID defined above
+            pipeline_id: ${resources.pipelines.pos_customer_silver_pipeline.id}
+            
+      queue:
+        enabled: true
+      performance_target: PERFORMANCE_OPTIMIZED
