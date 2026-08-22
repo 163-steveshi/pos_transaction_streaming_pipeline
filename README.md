@@ -1,6 +1,6 @@
 # Real-Time Streaming Pipelines with Databricks
  
-Built two production-style streaming pipelines using **Apache Kafka**, **Spark Streaming**, **Delta Live Tables (DLT)**, **Delta Lake Table**, **Amazon S3**, and **Databricks Asset Bundles (DAB)** to process POS transactions with a **Bronze–Silver–Gold** architecture.
+Built two streaming pipelines using **Apache Kafka**, **Spark Streaming**, **Delta Live Tables (DLT)**, **Delta Lake Table**, **Amazon S3**, and **Databricks Asset Bundles (DAB)** to process POS transactions with a **Bronze–Silver–Gold** architecture.
  
 ## Architecture
  
