@@ -9,7 +9,7 @@ flowchart TB
     subgraph P1["Pipeline 1: POS Transaction Streaming"]
         direction TB
         P[POS Transaction Generator] --> K[Apache Kafka]
-        K --> SS[Databricks Structured Streaming]
+        K --> SS[Spark Streaming]
         SS --> B1[Bronze]
         B1 --> S1[Silver]
         S1 --> G1[Gold]
@@ -18,11 +18,17 @@ flowchart TB
  
     subgraph P2["Pipeline 2: Customer Dimension Pipeline"]
         direction TB
-        S3[Amazon S3] --> DLT[Delta Live Tables]
-        DLT --> B2[Bronze]
-        B2 --> S2[Silver]
-        S2 --> G2[Gold]
+        S3[Amazon S3] --> B2
+        subgraph DLT["Delta Live Tables Framework"]
+            direction TB
+            B2[Bronze - Streaming Live Table]
+            S2[Silver - Streaming Live Table]
+            G2[Gold - Streaming Live Table]
+            B2 --> S2
+            S2 --> G2
+        end
     end
+ 
  
     P1 ~~~ P2
 ```
