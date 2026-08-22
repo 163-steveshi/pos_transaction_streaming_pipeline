@@ -6,7 +6,8 @@ Built two streaming pipelines using **Apache Kafka**, **Spark Streaming**, **Del
  
 ```mermaid
 flowchart TB
-    subgraph "Pipeline 1: POS Transaction Streaming"
+    subgraph P1["Pipeline 1: POS Transaction Streaming"]
+        direction TB
         P[POS Transaction Generator] --> K[Apache Kafka]
         K --> SS[Databricks Structured Streaming]
         SS --> B1[Bronze]
@@ -15,12 +16,15 @@ flowchart TB
         SS --> C[(Checkpoint)]
     end
  
-    subgraph "Pipeline 2: Customer Dimension Pipeline"
+    subgraph P2["Pipeline 2: Customer Dimension Pipeline"]
+        direction TB
         S3[Amazon S3] --> DLT[Delta Live Tables]
         DLT --> B2[Bronze]
         B2 --> S2[Silver]
         S2 --> G2[Gold]
     end
+ 
+    P1 ~~~ P2
 ```
  
 ## Pipelines
