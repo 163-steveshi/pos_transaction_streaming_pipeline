@@ -17,7 +17,9 @@ CREATE OR REPLACE TABLE dbs_external_another.silver.pos_transactions (
     ingested_time TIMESTAMP NOT NULL
 )USING DELTA LOCATION 's3://spark-read-study-bucket/pos_transaction_silver/cleaned_table'
 TBLPROPERTIES (
-  'quality' ='silver'
+  'quality' ='silver',
+  'delta.enableChangeDataFeed' = 'true',
+  'delta.enableRowTracking' = 'true'
 );
 drop TABLE dbs_external_another.silver.pos_transactions;
 
@@ -54,4 +56,8 @@ TBLPROPERTIES (
 );
 SELECT * FROM dbs_external_another.silver.pos_transactions_late_arrivals LIMIT 1000;
 SELECT * FROM dbs_external_another.silver.pos_transactions LIMIT 1000;
+
+-- ANALYZE TABLE dbs_external_another.silver.pos_transactions COMPUTE DELTA STATISTICS;
+-- ALTER TABLE dbs_external_another.silver.pos_transactions
+-- SET TBLPROPERTIES ('delta.enableRowTracking' = 'true');
 
